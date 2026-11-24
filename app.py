@@ -10,38 +10,36 @@ st.title("🔐 CryptoBox")
 st.caption("Brique 1 : César, substitution, transposition par colonnes")
 
 algo = st.sidebar.radio("Algorithme", ["César", "Substitution", "Transposition"])
-if algo == "Transposition":
-    st.sidebar.info("La transposition travaille sur les lettres A–Z (sans accents). "
-                    "Les espaces sont retirés, sauf si tu coches « Conserver les espaces ».")
-else:
-    st.sidebar.info("Les espaces, la ponctuation et les chiffres sont conservés ; "
-                    "seules les lettres sont chiffrées (accents retirés).")
+st.sidebar.info("Convention du projet : le texte est normalisé en majuscules A–Z, "
+                "sans espaces ni accents. Tu peux cocher « Conserver les espaces » "
+                "pour garder aussi espaces, ponctuation et chiffres.")
 
 modes = ["Chiffrer", "Déchiffrer"] + (["Force brute"] if algo == "César" else [])
 mode = st.radio("Mode", modes, horizontal=True)
 
 texte = st.text_area("Message" if mode == "Chiffrer" else "Texte chiffré",
                      height=120, placeholder="Saisissez votre texte ici…", key="texte")
-norm = cb.normaliser(texte)
+garder_espaces = st.checkbox(
+    "Conserver les espaces",
+    value=False,
+    help="Décoché (convention de l'énoncé) : espaces, ponctuation et accents sont "
+         "retirés. Coché : ils sont conservés ; seules les lettres sont chiffrées "
+         "(en transposition, chaque espace est une case du tableau).")
 
-garder_espaces = False
+# texte réellement traité (visible pour comprendre la normalisation)
 if algo == "Transposition":
-    garder_espaces = st.checkbox(
-        "Conserver les espaces", value=False,
-        help="Coché : l'espace est une case du tableau et revient à sa place au "
-             "déchiffrement. Décoché : les espaces sont retirés.")
     prepare = cb.preparer_transposition(texte, garder_espaces,
                                         nettoyer=(mode == "Chiffrer"))
-    if texte:
-        affiche = prepare.replace(" ", "␣")
-        st.caption(f"Texte pris en compte ({len(prepare)} caractères"
-                   f"{', espaces inclus' if garder_espaces else ''}) : "
-                   f"`{affiche or '—'}`")
+else:
+    prepare = cb.preparer(texte, garder_espaces)
+if texte:
+    st.caption(f"Texte pris en compte ({len(prepare)} caractères) : "
+               f"`{prepare.replace(' ', '␣') or '—'}`")
 
 # ------------------------------------------------------------- clés
 cle = None
 if algo == "César" and mode != "Force brute":
-    cle = st.slider("Clé k", 0, 25, 3)
+    cle = int(st.number_input("Clé k (entier quelconque)", value=3, step=1))
 elif algo == "Substitution":
     if "cle_sub" not in st.session_state:
         st.session_state.cle_sub = "QWERTYUIOPASDFGHJKLZXCVBNM"
@@ -54,12 +52,12 @@ elif algo == "Transposition":
     cle = st.text_input("Mot-clé", value="CLE")
 
 # --------------------------------------------------------- traitement
-if not norm:  # aucune lettre à traiter
+if not cb.normaliser(texte):  # aucune lettre à traiter
     st.stop()
 
 # --- César : force brute -> on affiche d'abord la clé la plus lisible
 if algo == "César" and mode == "Force brute":
-    meilleur_k, meilleur_texte = cb.cesar_meilleure_cle(texte)
+    meilleur_k, meilleur_texte = cb.cesar_meilleure_cle(texte, garder_espaces)
     st.subheader("Clé la plus probable")
     st.success(f"k = {meilleur_k}")
     st.code(meilleur_texte, language=None)
@@ -74,11 +72,11 @@ if algo == "César" and mode == "Force brute":
               else "Afficher tous les k", on_click=_basculer)
 
     if st.session_state.tous_k:
-        st.subheader("Les 25 clés possibles")
+        st.subheader("Les 25 clés testées")
         st.dataframe(
             [{"Clé": k, "Texte possible": t,
               "": "✅ plus probable" if k == meilleur_k else ""}
-             for k, t in cb.cesar_force_brute(texte)],
+             for k, t in cb.cesar_force_brute(texte, garder_espaces)],
             hide_index=True, width='stretch')
     st.stop()
 
@@ -91,8 +89,7 @@ try:
     else:
         f = (cb.transposition_chiffrer if mode == "Chiffrer"
              else cb.transposition_dechiffrer)
-        f = lambda t, c, _f=f: _f(t, c, garder_espaces)
-    resultat = f(texte, cle)
+    resultat = f(texte, cle, garder_espaces)
 except ValueError as e:
     st.error(str(e))
     st.stop()

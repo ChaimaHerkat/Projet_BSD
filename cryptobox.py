@@ -3,15 +3,15 @@
 
 Aucune bibliothèque de cryptographie : tout est codé à la main.
 
-Conventions :
-  - César et substitution CONSERVENT les espaces, la ponctuation et les
-    chiffres ; seules les lettres sont chiffrées (sortie en majuscules,
-    accents retirés : é -> E).
-  - La transposition par colonnes a deux modes :
-      * par défaut : lettres A-Z uniquement (espaces et ponctuation retirés),
-        comme dans le cours ;
-      * garder_espaces=True : l'espace compte comme un caractère du tableau
-        et revient à sa place au déchiffrement (autre ponctuation retirée).
+Convention de l'énoncé (comportement par défaut) :
+  lettres majuscules A-Z uniquement, sans espaces ni accents.
+  Tout texte saisi est donc normalisé d'abord : 'Été à Paris !' -> 'ETEAPARIS'.
+
+Option garder_espaces=True (les trois algorithmes) :
+  les espaces, la ponctuation et les chiffres sont conservés (accents retirés,
+  tout en majuscules). César/substitution les laissent à leur place ;
+  en transposition ce sont des cases du tableau qui reviennent à leur
+  place au déchiffrement.
 """
 import argparse
 import math
@@ -31,17 +31,17 @@ def _sans_accents(texte):
     return "".join(c for c in texte if not unicodedata.combining(c))
 
 
-def preparer(texte):
-    """Texte prêt pour César / substitution : majuscules, sans accents,
-    mais avec les espaces, la ponctuation et les chiffres.
-    'Bonjour le monde !' -> 'BONJOUR LE MONDE !'"""
-    return _sans_accents(texte)
-
-
 def normaliser(texte):
-    """Format strict : majuscules A-Z seulement (utilisé par la transposition).
+    """Format de l'énoncé : majuscules A-Z seulement.
     'Été à Paris !' -> 'ETEAPARIS'."""
     return "".join(c for c in _sans_accents(texte) if "A" <= c <= "Z")
+
+
+def preparer(texte, garder_espaces=False):
+    """Texte prêt pour César / substitution.
+    Par défaut : A-Z seulement. Avec garder_espaces : on garde espaces,
+    ponctuation et chiffres (seules les lettres seront chiffrées)."""
+    return _sans_accents(texte) if garder_espaces else normaliser(texte)
 
 
 def _decaler(texte, k):
@@ -51,20 +51,20 @@ def _decaler(texte, k):
 
 
 # ---------------------------------------------------------------- César
-def cesar_chiffrer(message, k):
-    """C = (M + k) mod 26  (espaces et ponctuation conservés)"""
-    return _decaler(preparer(message), k)
+def cesar_chiffrer(message, k, garder_espaces=False):
+    """C = (M + k) mod 26   (k : n'importe quel entier)"""
+    return _decaler(preparer(message, garder_espaces), k)
 
 
-def cesar_dechiffrer(chiffre, k):
+def cesar_dechiffrer(chiffre, k, garder_espaces=False):
     """M = (C - k) mod 26"""
-    return _decaler(preparer(chiffre), -k)
+    return _decaler(preparer(chiffre, garder_espaces), -k)
 
 
-def cesar_force_brute(chiffre):
+def cesar_force_brute(chiffre, garder_espaces=False):
     """Teste les 25 clés (1 à 25). Renvoie une liste de (clé, texte clair possible)."""
-    chiffre = preparer(chiffre)
-    return [(k, cesar_dechiffrer(chiffre, k)) for k in range(1, 26)]
+    chiffre = preparer(chiffre, garder_espaces)
+    return [(k, cesar_dechiffrer(chiffre, k, garder_espaces)) for k in range(1, 26)]
 
 
 # --- choix automatique de la clé la plus plausible (force brute lisible)
@@ -91,6 +91,21 @@ FROM OR HAD BY HELLO WORLD WORD NOT BUT WHAT ALL WERE WE WHEN YOUR CAN SAID THER
 WACH NE9RAW SAHA LABES KHOYA
 """.split())
 
+# Mots d'au moins 3 lettres, pour repérer des mots collés (texte sans espaces).
+_MOTS_SEG = sorted((m for m in _MOTS if len(m) >= 3 and m.isalpha()), key=len)
+
+
+def _couverture(lettres):
+    """Nombre maximal de lettres couvertes par des mots connus mis bout à bout
+    (découpage d'un texte sans espaces en mots du dictionnaire)."""
+    meilleur = [0] * (len(lettres) + 1)
+    for i in range(1, len(lettres) + 1):
+        meilleur[i] = meilleur[i - 1]
+        for m in _MOTS_SEG:
+            if len(m) <= i and lettres[i - len(m):i] == m:
+                meilleur[i] = max(meilleur[i], meilleur[i - len(m)] + len(m))
+    return meilleur[-1]
+
 
 def _score(texte):
     """Plus le score est élevé, plus le texte ressemble à du français lisible."""
@@ -112,18 +127,21 @@ def _score(texte):
             if mot in _MOTS:
                 score += 2 + len(mot)
             mot = ""
+    # 4) texte collé sans espaces : mots connus mis bout à bout
+    score += 1.5 * _couverture(lettres)
     return score
 
 
-def cesar_meilleure_cle(chiffre):
+def cesar_meilleure_cle(chiffre, garder_espaces=False):
     """Renvoie (k, texte clair) pour la clé qui donne le texte le plus lisible."""
-    k, texte = max(cesar_force_brute(chiffre), key=lambda kt: _score(kt[1]))
-    return k, texte
+    return max(cesar_force_brute(chiffre, garder_espaces),
+               key=lambda kt: _score(kt[1]))
 
 
-def cesar_force_brute_classee(chiffre):
+def cesar_force_brute_classee(chiffre, garder_espaces=False):
     """Les 25 candidats triés du plus lisible au moins lisible."""
-    return sorted(cesar_force_brute(chiffre), key=lambda kt: -_score(kt[1]))
+    return sorted(cesar_force_brute(chiffre, garder_espaces),
+                  key=lambda kt: -_score(kt[1]))
 
 
 # --------------------------------------------------------- Substitution
@@ -135,19 +153,19 @@ def verifier_cle_substitution(cle):
     return cle
 
 
-def _substituer(texte, table):
-    return "".join(table.get(c, c) for c in preparer(texte))  # non-lettres inchangés
+def _substituer(texte, table, garder_espaces):
+    return "".join(table.get(c, c) for c in preparer(texte, garder_espaces))
 
 
-def substitution_chiffrer(message, cle):
-    """A -> 1re lettre de la clé, B -> 2e, etc. (espaces conservés)"""
+def substitution_chiffrer(message, cle, garder_espaces=False):
+    """A -> 1re lettre de la clé, B -> 2e, etc."""
     cle = verifier_cle_substitution(cle)
-    return _substituer(message, dict(zip(ALPHABET, cle)))
+    return _substituer(message, dict(zip(ALPHABET, cle)), garder_espaces)
 
 
-def substitution_dechiffrer(chiffre, cle):
+def substitution_dechiffrer(chiffre, cle, garder_espaces=False):
     cle = verifier_cle_substitution(cle)
-    return _substituer(chiffre, dict(zip(cle, ALPHABET)))  # table inverse
+    return _substituer(chiffre, dict(zip(cle, ALPHABET)), garder_espaces)  # table inverse
 
 
 # --------------------------------------------------------- Transposition
@@ -162,14 +180,13 @@ def _ordre_colonnes(motcle):
 
 def preparer_transposition(texte, garder_espaces=False, nettoyer=True):
     """Texte tel qu'il est placé dans la grille de transposition.
-    - garder_espaces=False : lettres A-Z seulement.
-    - garder_espaces=True  : lettres A-Z + espaces. Avec nettoyer=True (chiffrement)
-      les espaces multiples/de bord sont réduits ; avec nettoyer=False
-      (déchiffrement) on ne touche à rien : chaque espace est une case."""
+    - garder_espaces=False : lettres A-Z seulement (énoncé).
+    - garder_espaces=True  : espaces, ponctuation et chiffres sont des cases.
+      Avec nettoyer=True (chiffrement) les blancs multiples/de bord sont
+      réduits ; avec nettoyer=False (déchiffrement) on ne touche à rien."""
     if not garder_espaces:
         return normaliser(texte)
-    texte = "".join(c if "A" <= c <= "Z" else " "
-                    for c in _sans_accents(texte) if "A" <= c <= "Z" or c.isspace())
+    texte = "".join(" " if c.isspace() else c for c in _sans_accents(texte))
     return " ".join(texte.split()) if nettoyer else texte
 
 
@@ -210,25 +227,28 @@ def _parser():
     p = argparse.ArgumentParser(prog="cryptobox",
                                 description="CryptoBox - brique 1")
     sub = p.add_subparsers(dest="algo", required=True)
+    aide_esp = ("garder espaces, ponctuation et chiffres "
+                "(par défaut : lettres A-Z seulement)")
 
     c = sub.add_parser("cesar", help="chiffre de César")
     c.add_argument("action", choices=["chiffrer", "dechiffrer", "brute"])
     c.add_argument("texte", nargs="?")
-    c.add_argument("-k", "--cle", type=int, help="décalage (entier)")
+    c.add_argument("-k", "--cle", type=int, help="décalage (entier quelconque)")
     c.add_argument("--tous", action="store_true",
                    help="avec 'brute' : afficher les 25 clés (sinon la plus lisible)")
+    c.add_argument("--espaces", action="store_true", help=aide_esp)
 
     s = sub.add_parser("substitution", help="substitution monoalphabétique")
     s.add_argument("action", choices=["chiffrer", "dechiffrer"])
     s.add_argument("texte", nargs="?")
     s.add_argument("-k", "--cle", required=True, help="alphabet de 26 lettres")
+    s.add_argument("--espaces", action="store_true", help=aide_esp)
 
     t = sub.add_parser("transposition", help="transposition par colonnes")
     t.add_argument("action", choices=["chiffrer", "dechiffrer"])
     t.add_argument("texte", nargs="?")
     t.add_argument("-k", "--cle", required=True, help="mot-clé")
-    t.add_argument("--espaces", action="store_true",
-                   help="garder les espaces (ils comptent comme des cases du tableau)")
+    t.add_argument("--espaces", action="store_true", help=aide_esp)
     return p
 
 
@@ -239,16 +259,16 @@ def main(argv=None):
         if a.algo == "cesar":
             if a.action == "brute":
                 if a.tous:
-                    for k, t in cesar_force_brute(texte):
+                    for k, t in cesar_force_brute(texte, a.espaces):
                         print(f"{k:2d}  {t}")
                 else:
-                    k, t = cesar_meilleure_cle(texte)
+                    k, t = cesar_meilleure_cle(texte, a.espaces)
                     print(f"k = {k} : {t}")
                 return 0
             if a.cle is None:
                 raise ValueError("L'option -k est requise.")
             f = cesar_chiffrer if a.action == "chiffrer" else cesar_dechiffrer
-            print(f(texte, a.cle))
+            print(f(texte, a.cle, a.espaces))
         else:
             fonctions = {
                 ("substitution", "chiffrer"): substitution_chiffrer,
@@ -256,10 +276,7 @@ def main(argv=None):
                 ("transposition", "chiffrer"): transposition_chiffrer,
                 ("transposition", "dechiffrer"): transposition_dechiffrer,
             }
-            if a.algo == "transposition":
-                print(fonctions[(a.algo, a.action)](texte, a.cle, a.espaces))
-            else:
-                print(fonctions[(a.algo, a.action)](texte, a.cle))
+            print(fonctions[(a.algo, a.action)](texte, a.cle, a.espaces))
     except ValueError as e:
         print(f"Erreur : {e}", file=sys.stderr)
         return 1
