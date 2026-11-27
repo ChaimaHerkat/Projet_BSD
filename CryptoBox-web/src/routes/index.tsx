@@ -1,9 +1,10 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
-import { Copy, Dices, KeyRound, Lock, LockOpen, ShieldCheck, Shuffle, Columns3, Search, Layers, Plus, X } from "lucide-react";
+import { Copy, Dices, KeyRound, Lock, LockOpen, ShieldCheck, Shuffle, Columns3, Search, Layers, Plus, X, Key } from "lucide-react";
 import { toast } from "sonner";
 import { Toaster } from "@/components/ui/sonner";
 import * as C from "@/lib/cryptobox";
+import * as V from "@/lib/vigenere";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -19,41 +20,67 @@ export const Route = createFileRoute("/")({
   component: Index,
 });
 
-type Algo = "cesar" | "substitution" | "transposition" | "multi";
+type Algo = "cesar" | "substitution" | "transposition" | "vigenere" | "multi";
 type Mode = "chiffrer" | "dechiffrer" | "brute";
 
 const ALGOS: { id: Algo; label: string; desc: string; icon: typeof Lock }[] = [
   { id: "cesar", label: "César", desc: "C = (M + k) mod 26", icon: KeyRound },
   { id: "substitution", label: "Substitution", desc: "Alphabet de 26 lettres", icon: Shuffle },
   { id: "transposition", label: "Transposition", desc: "Colonnes par mot-clé", icon: Columns3 },
+  { id: "vigenere", label: "Vigenère", desc: "Clé répétée sur les lettres", icon: Key },
   { id: "multi", label: "Multi-couches", desc: "Couches enchaînées", icon: Layers },
 ];
 
 function Index() {
   const [algo, setAlgo] = useState<Algo>("cesar");
   const [mode, setMode] = useState<Mode>("chiffrer");
-  const [texte, setTexte] = useState("BONJOUR");
+  const [texte, setTexte] = useState("");
   const [garder, setGarder] = useState(false);
-  const [k, setK] = useState(3);
-  const [cleSub, setCleSub] = useState("QWERTYUIOPASDFGHJKLZXCVBNM");
-  const [mot, setMot] = useState("PORTE");
+  const [kStr, setKStr] = useState("");
+  const k = parseInt(kStr, 10);
+  const [cleSub, setCleSub] = useState("");
+  const [mot, setMot] = useState("");
+  const [cleVig, setCleVig] = useState("");
+  const [longueur, setLongueur] = useState("");
   const [tout, setTout] = useState(false);
 
-  const effectiveMode: Mode = algo !== "cesar" && mode === "brute" ? "chiffrer" : mode;
+  const effectiveMode: Mode = algo !== "cesar" && algo !== "vigenere" && mode === "brute" ? "chiffrer" : mode;
 
   const { resultat, erreur, brute } = useMemo(() => {
+    const vide = { resultat: "", erreur: "", brute: null };
+    if (!texte.trim()) return vide;
+    if (algo === "cesar" && effectiveMode !== "brute" && Number.isNaN(k)) return vide;
+    if (algo === "substitution" && !cleSub.trim()) return vide;
+    if (algo === "transposition" && !mot.trim()) return vide;
+    if (algo === "vigenere" && (effectiveMode === "brute" || !cleVig.trim())) return vide;
     try {
       if (algo === "cesar") {
         if (effectiveMode === "brute") return { resultat: "", erreur: "", brute: C.cesarForceBruteClassee(texte, garder) };
         return { resultat: effectiveMode === "chiffrer" ? C.cesarChiffrer(texte, k, garder) : C.cesarDechiffrer(texte, k, garder), erreur: "", brute: null };
       }
+      if (algo === "vigenere")
+        return { resultat: effectiveMode === "chiffrer" ? V.vigenereChiffrer(texte, cleVig) : V.vigenereDechiffrer(texte, cleVig), erreur: "", brute: null };
       if (algo === "substitution")
         return { resultat: effectiveMode === "chiffrer" ? C.substitutionChiffrer(texte, cleSub, garder) : C.substitutionDechiffrer(texte, cleSub, garder), erreur: "", brute: null };
       return { resultat: effectiveMode === "chiffrer" ? C.transpositionChiffrer(texte, mot, garder) : C.transpositionDechiffrer(texte, mot, garder), erreur: "", brute: null };
     } catch (e) {
       return { resultat: "", erreur: (e as Error).message, brute: null };
     }
-  }, [algo, effectiveMode, texte, garder, k, cleSub, mot]);
+  }, [algo, effectiveMode, texte, garder, k, cleSub, mot, cleVig]);
+
+  // Casseur de Vigenère : texte + longueur L -> clé + texte déchiffré
+  const casseur = useMemo(() => {
+    if (algo !== "vigenere" || effectiveMode !== "brute") return null;
+    const L = parseInt(longueur, 10);
+    if (!texte.trim() || Number.isNaN(L) || L < 1) return null;
+    const nb = V.normaliserVig(texte).replace(/[^A-Z]/g, "").length;
+    try {
+      const cle = V.casserVigenere(texte, L);
+      return { cle, clair: V.vigenereDechiffrer(texte, cle), nb, L, erreur: "" };
+    } catch (e) {
+      return { cle: "", clair: "", nb, L, erreur: (e as Error).message };
+    }
+  }, [algo, effectiveMode, texte, longueur]);
 
   const prepare = C.preparer(texte, garder);
   const copier = (t: string) => { navigator.clipboard.writeText(t); toast.success("Copié dans le presse-papiers"); };
@@ -61,7 +88,7 @@ function Index() {
   const modes: { id: Mode; label: string; icon: typeof Lock }[] = [
     { id: "chiffrer", label: "Chiffrer", icon: Lock },
     { id: "dechiffrer", label: "Déchiffrer", icon: LockOpen },
-    ...(algo === "cesar" ? [{ id: "brute" as Mode, label: "Force brute", icon: Search }] : []),
+    ...(algo === "cesar" ? [{ id: "brute" as Mode, label: "Force brute", icon: Search }] : algo === "vigenere" ? [{ id: "brute" as Mode, label: "Casseur", icon: Search }] : []),
   ];
 
   return (
@@ -96,9 +123,15 @@ function Index() {
               </button>
             );
           })}
-          <div className="mt-6 rounded-xl border border-border bg-card/40 p-4 text-sm text-muted-foreground">
-            Le texte est normalisé en majuscules A–Z, sans espaces ni accents. <span className="font-mono text-foreground">Été à Paris !</span> → <span className="font-mono text-primary">ETEAPARIS</span>
-          </div>
+          {algo === "vigenere" ? (
+            <div className="mt-6 rounded-xl border border-border bg-card/40 p-4 text-sm text-muted-foreground">
+              Majuscules sans accents. Espaces, chiffres et ponctuation sont recopiés tels quels, et la clé n'avance que sur les lettres. <span className="font-mono text-foreground">Clé CLE : ATTAQUE A L'AUBE</span> → <span className="font-mono text-primary">CEXCBYG L P'CFFG</span>
+            </div>
+          ) : (
+            <div className="mt-6 rounded-xl border border-border bg-card/40 p-4 text-sm text-muted-foreground">
+              Le texte est normalisé en majuscules A–Z, sans espaces ni accents. <span className="font-mono text-foreground">Été à Paris !</span> → <span className="font-mono text-primary">ETEAPARIS</span>
+            </div>
+          )}
         </aside>
 
         <main className="space-y-6">
@@ -120,8 +153,13 @@ function Index() {
                 </div>
 
                 <label className="mb-2 block text-sm font-medium">{effectiveMode === "chiffrer" ? "Message" : "Texte chiffré"}</label>
-                <textarea value={texte} onChange={(e) => setTexte(e.target.value)} rows={4}
+                <textarea value={texte} onChange={(e) => setTexte(e.target.value)} rows={4} placeholder="Écrivez votre message ici…"
                   className="w-full resize-y rounded-xl border border-input bg-background/60 p-4 font-mono text-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-ring/30" />
+                {algo === "vigenere" ? (
+                  <p className="mt-2 font-mono text-xs text-muted-foreground">
+                    Lettres : {V.normaliserVig(texte).replace(/[^A-Z]/g, "").length}
+                  </p>
+                ) : (
                 <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
                   <span className="font-mono">Pris en compte ({prepare.length}) : {prepare.slice(0, 60)}{prepare.length > 60 ? "…" : ""}</span>
                   <label className="flex cursor-pointer items-center gap-2">
@@ -129,32 +167,70 @@ function Index() {
                     Conserver les espaces et la ponctuation
                   </label>
                 </div>
+                )}
 
                 {effectiveMode !== "brute" && (
                   <div className="mt-5">
                     {algo === "cesar" && (
                       <Field label="Clé k">
-                        <input type="number" value={k} onChange={(e) => setK(parseInt(e.target.value || "0", 10))} className="input-field w-32" />
+                        <input type="number" value={kStr} onChange={(e) => setKStr(e.target.value)} placeholder="Ex : 3" className="input-field w-32" />
                       </Field>
                     )}
                     {algo === "substitution" && (
                       <Field label="Clé (26 lettres)">
                         <div className="flex gap-2">
-                          <input value={cleSub} onChange={(e) => setCleSub(e.target.value.toUpperCase())} className="input-field flex-1 tracking-widest" />
+                          <input value={cleSub} onChange={(e) => setCleSub(e.target.value.toUpperCase())} placeholder="Ex : QWERTYUIOPASDFGHJKLZXCVBNM" className="input-field flex-1 tracking-widest" />
                           <button onClick={() => setCleSub(C.cleAleatoire())} className="btn-ghost"><Dices className="h-4 w-4" /> Aléatoire</button>
                         </div>
                       </Field>
                     )}
+                    {algo === "vigenere" && (
+                      <Field label="Clé">
+                        <input value={cleVig} onChange={(e) => setCleVig(e.target.value.toUpperCase())} placeholder="Ex : CLE" className="input-field w-60 tracking-widest" />
+                      </Field>
+                    )}
                     {algo === "transposition" && (
                       <Field label="Mot-clé">
-                        <input value={mot} onChange={(e) => setMot(e.target.value.toUpperCase())} className="input-field w-60 tracking-widest" />
+                        <input value={mot} onChange={(e) => setMot(e.target.value.toUpperCase())} placeholder="Ex : PORTE" className="input-field w-60 tracking-widest" />
                       </Field>
                     )}
                   </div>
                 )}
+                {algo === "vigenere" && effectiveMode === "brute" && (
+                  <div className="mt-5">
+                    <Field label="Longueur de la clé (L)">
+                      <input type="number" min={1} value={longueur} onChange={(e) => setLongueur(e.target.value)} placeholder="Ex : 5" className="input-field w-32" />
+                    </Field>
+                    <p className="mt-2 text-xs text-muted-foreground">Le texte doit être assez long (environ 400 mots) pour que la fréquence des lettres soit fiable.</p>
+                  </div>
+                )}
               </section>
 
-              {effectiveMode !== "brute" ? (
+              {algo === "vigenere" && effectiveMode === "brute" ? (
+                casseur && (
+                  <section className="rounded-2xl border border-primary/30 bg-card/80 p-6 shadow-glow">
+                    <p className="mb-2 font-mono text-xs uppercase tracking-widest text-primary">Clé trouvée</p>
+                    {casseur.erreur ? (
+                      <p className="text-sm text-destructive">{casseur.erreur}</p>
+                    ) : (
+                      <>
+                        <div className="flex flex-wrap items-center gap-3">
+                          <span className="rounded-lg bg-primary px-3 py-1 font-mono text-lg font-bold tracking-widest text-primary-foreground">{casseur.cle}</span>
+                          <button onClick={() => copier(casseur.cle)} className="btn-ghost"><Copy className="h-4 w-4" /> Copier la clé</button>
+                        </div>
+                        {casseur.nb < 60 * casseur.L && (
+                          <p className="mt-3 text-sm text-destructive">Texte court pour L = {casseur.L} : la clé trouvée peut être fausse.</p>
+                        )}
+                        <div className="mb-2 mt-5 flex items-center justify-between">
+                          <p className="font-mono text-xs uppercase tracking-widest text-primary">Texte déchiffré</p>
+                          <button onClick={() => copier(casseur.clair)} className="btn-ghost"><Copy className="h-4 w-4" /> Copier</button>
+                        </div>
+                        <p className="whitespace-pre-wrap break-words font-mono text-sm leading-relaxed">{casseur.clair}</p>
+                      </>
+                    )}
+                  </section>
+                )
+              ) : effectiveMode !== "brute" ? (
                 <section className="rounded-2xl border border-primary/30 bg-card/80 p-6 shadow-glow">
                   <div className="mb-3 flex items-center justify-between">
                     <p className="font-mono text-xs uppercase tracking-widest text-primary">Résultat</p>
@@ -208,17 +284,17 @@ const TYPES: { id: C.Couche["type"]; label: string }[] = [
 
 function nouvelleCouche(type: C.Couche["type"]): C.Couche {
   if (type === "cesar") return { type: "cesar", k: null };
-  if (type === "substitution") return { type: "substitution", cle: "QWERTYUIOPASDFGHJKLZXCVBNM" };
-  return { type: "transposition", motcle: "PORTE" };
+  if (type === "substitution") return { type: "substitution", cle: "" };
+  return { type: "transposition", motcle: "" };
 }
 
 function MultiCouches() {
-  const [texte, setTexte] = useState("ASVAJKRTXMNVYEY");
+  const [texte, setTexte] = useState("");
   const [garder, setGarder] = useState(false);
   const [couches, setCouches] = useState<C.Couche[]>([
     { type: "cesar", k: null },
-    { type: "transposition", motcle: "PORTE" },
-    { type: "substitution", cle: "QWERTYUIOPASDFGHJKLZXCVBNM" },
+    { type: "transposition", motcle: "" },
+    { type: "substitution", cle: "" },
   ]);
   const [essais, setEssais] = useState<C.EssaiMulti[] | null>(null);
   const [erreur, setErreur] = useState("");
@@ -318,7 +394,7 @@ function MultiCouches() {
                   <div className="min-w-72 flex-1">
                     <Field label="Clé (alphabet de 26 lettres)">
                       <div className="flex gap-2">
-                        <input value={c.cle} onChange={(e) => majCouche(i, { type: "substitution", cle: e.target.value.toUpperCase() })} className="input-field flex-1 tracking-widest" />
+                        <input value={c.cle} onChange={(e) => majCouche(i, { type: "substitution", cle: e.target.value.toUpperCase() })} placeholder="Ex : QWERTYUIOPASDFGHJKLZXCVBNM" className="input-field flex-1 tracking-widest" />
                         <button onClick={() => majCouche(i, { type: "substitution", cle: C.cleAleatoire() })} className="btn-ghost"><Dices className="h-4 w-4" /></button>
                       </div>
                     </Field>
@@ -327,7 +403,7 @@ function MultiCouches() {
 
                 {c.type === "transposition" && (
                   <Field label="Mot-clé">
-                    <input value={c.motcle} onChange={(e) => majCouche(i, { type: "transposition", motcle: e.target.value.toUpperCase() })} className="input-field w-48 tracking-widest" />
+                    <input value={c.motcle} onChange={(e) => majCouche(i, { type: "transposition", motcle: e.target.value.toUpperCase() })} placeholder="Ex : PORTE" className="input-field w-48 tracking-widest" />
                   </Field>
                 )}
               </div>
